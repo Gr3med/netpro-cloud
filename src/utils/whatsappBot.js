@@ -2,18 +2,15 @@ const { Client, RemoteAuth } = require('whatsapp-web.js');
 const { MongoStore } = require('wwebjs-mongo');
 const mongoose = require('mongoose');
 
-// ⚠️ ضع رقم هاتفك هنا مع مفتاح الدولة (بدون +)
-const MY_PHONE_NUMBER = '96770674574'; 
-
-// رابط قاعدة البيانات من إعدادات Render
+// ⚠️ تأكد من وضع رقمك هنا
+const MY_PHONE_NUMBER = '967770674574'; 
 const MONGODB_URI = process.env.MONGO_URI; 
 
-// 1. تعريف المتغير في النطاق العام (Global Scope)
 let whatsappClient = null;
+let isPairingRequested = false; // حارس لمنع تكرار الطلب
 
 console.log('🔄 جاري الاتصال بقاعدة بيانات الجلسات (MongoDB)...');
 
-// 2. بدء الاتصال والتجهيز
 mongoose.connect(MONGODB_URI).then(() => {
     console.log('✅ تم الاتصال بقاعدة بيانات MongoDB بنجاح.');
     
@@ -35,20 +32,33 @@ mongoose.connect(MONGODB_URI).then(() => {
                 '--no-zygote',
                 '--single-process',
                 '--disable-gpu'
-            ]
-        }
+            ],
+            timeout: 60000 // إعطاء المتصفح دقيقة كاملة ليفتح
+        },
+        authTimeoutMs: 120000, // إعطاء عملية المصادقة دقيقتين كاملتين
+        qrMaxRetries: 3 // تقليل محاولات إعادة الرسم حتى لا ينهار السيرفر
     });
 
     whatsappClient.on('qr', async () => {
-        console.log('⏳ جاري استخراج رمز الربط السري (Pairing Code)...');
-        try {
-            const pairingCode = await whatsappClient.requestPairingCode(MY_PHONE_NUMBER);
-            console.log('\n=========================================');
-            console.log(`🔑 رمز الربط الخاص بك هو: ${pairingCode}`);
-            console.log('=========================================\n');
-        } catch (error) {
-            console.error('❌ خطأ في طلب الرمز:', error.message);
-        }
+        // إذا تم طلب الكود مسبقاً، لا تطلبه مرة أخرى
+        if (isPairingRequested) return;
+        isPairingRequested = true;
+
+        console.log('⏳ تم رصد استجابة الواتساب! ننتظر 6 ثوانٍ لاكتمال تحميل الصفحة على السيرفر البطيء...');
+        
+        // الانتظار الإجباري للسيرفرات المجانية قبل طلب الرمز
+        setTimeout(async () => {
+            console.log('⏳ جاري طلب رمز الربط السري (Pairing Code)...');
+            try {
+                const pairingCode = await whatsappClient.requestPairingCode(MY_PHONE_NUMBER);
+                console.log('\n=========================================');
+                console.log(`🔑 رمز الربط الخاص بك هو: ${pairingCode}`);
+                console.log('=========================================\n');
+            } catch (error) {
+                console.error('❌ خطأ في طلب الرمز، السيرفر أبطأ من اللازم:', error.message);
+                isPairingRequested = false; // السماح بمحاولة جديدة
+            }
+        }, 6000); // تأخير 6 ثوانٍ
     });
 
     whatsappClient.on('remote_session_saved', () => {
@@ -61,6 +71,7 @@ mongoose.connect(MONGODB_URI).then(() => {
 
     whatsappClient.on('disconnected', (reason) => {
         console.log('⚠️ انقطع اتصال الواتساب:', reason);
+        isPairingRequested = false;
         whatsappClient.initialize();
     });
 
@@ -70,10 +81,8 @@ mongoose.connect(MONGODB_URI).then(() => {
     console.error('❌ فشل الاتصال بقاعدة بيانات MongoDB:', err);
 });
 
-// 3. تصدير دالة وسيطة لملف server.js
 module.exports = {
     sendMessage: async (chatId, message) => {
-        // حماية السيرفر: التأكد من أن البوت جاهز قبل محاولة الإرسال
         if (!whatsappClient) {
             throw new Error('محرك الواتساب لم يكتمل تشغيله بعد، يرجى الانتظار ثوانٍ قليلة.');
         }
