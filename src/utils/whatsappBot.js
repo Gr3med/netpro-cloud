@@ -3,7 +3,7 @@ const { MongoStore } = require('wwebjs-mongo');
 const mongoose = require('mongoose');
 
 // ⚠️ ضع رقم هاتفك هنا مع مفتاح الدولة (بدون +)
-const MY_PHONE_NUMBER = '967xxxxxxxxx'; 
+const MY_PHONE_NUMBER = '96770674574'; 
 
 // رابط قاعدة البيانات من إعدادات Render
 const MONGODB_URI = process.env.MONGO_URI; 
