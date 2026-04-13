@@ -1,51 +1,38 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 
-// مهم: استدعاء puppeteer الكامل
-const puppeteer = require('puppeteer');
-
 const client = new Client({
-    authStrategy: new LocalAuth({
-        dataPath: './.wwebjs_auth' // حفظ الجلسة
-    }),
+    authStrategy: new LocalAuth(), // يحفظ الجلسة في مجلد .wwebjs_auth
     puppeteer: {
         headless: true,
-
-        // 🔥 أهم سطر لحل مشكلة Chrome
-        executablePath: puppeteer.executablePath(),
-
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
+            '--disable-dev-shm-usage', // يمنع انهيار الذاكرة في سيرفرات لينكس
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--single-process',
+            '--single-process', // الأهم لـ Render: دمج العمليات لتقليل الرام
             '--disable-gpu'
         ]
     }
 });
 
-// QR
 client.on('qr', (qr) => {
-    console.log('--- QR CODE ---');
+    console.log('=========================================');
+    console.log('📱 عاجل: امسح الباركود التالي لربط الواتساب');
+    console.log('=========================================');
     qrcode.generate(qr, { small: true });
 });
 
-// جاهز
 client.on('ready', () => {
-    console.log('✅ WhatsApp Ready!');
+    console.log('✅ تم ربط الواتساب بنجاح! المحرك جاهز.');
 });
 
-// فشل المصادقة
-client.on('auth_failure', msg => {
-    console.error('❌ Auth failed:', msg);
-});
-
-// أخطاء عامة (مهم جدًا)
+// إعادة التشغيل التلقائي إذا انقطع الاتصال
 client.on('disconnected', (reason) => {
-    console.log('🔴 Disconnected:', reason);
+    console.log('⚠️ انقطع اتصال الواتساب:', reason);
+    client.initialize();
 });
 
 client.initialize();
