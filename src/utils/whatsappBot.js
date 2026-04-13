@@ -1,13 +1,14 @@
 const { Client, RemoteAuth } = require('whatsapp-web.js');
 const { MongoStore } = require('wwebjs-mongo');
 const mongoose = require('mongoose');
+const qrcode = require('qrcode-terminal'); // استدعاء مكتبة الباركود
 
-// ⚠️ تأكد من وضع رقمك هنا
+// ⚠️ ضع رقم هاتفك هنا مع مفتاح الدولة (بدون +)
 const MY_PHONE_NUMBER = '967770674574'; 
 const MONGODB_URI = process.env.MONGO_URI; 
 
 let whatsappClient = null;
-let isPairingRequested = false; // حارس لمنع تكرار الطلب
+let isQrPrinted = false; // حارس لمنع تكرار الطباعة
 
 console.log('🔄 جاري الاتصال بقاعدة بيانات الجلسات (MongoDB)...');
 
@@ -33,36 +34,41 @@ mongoose.connect(MONGODB_URI).then(() => {
                 '--single-process',
                 '--disable-gpu'
             ],
-            timeout: 60000 // إعطاء المتصفح دقيقة كاملة ليفتح
+            timeout: 60000
         },
-        authTimeoutMs: 120000, // إعطاء عملية المصادقة دقيقتين كاملتين
-        qrMaxRetries: 3 // تقليل محاولات إعادة الرسم حتى لا ينهار السيرفر
+        authTimeoutMs: 120000,
+        qrMaxRetries: 3
     });
 
-    whatsappClient.on('qr', async () => {
-        // إذا تم طلب الكود مسبقاً، لا تطلبه مرة أخرى
-        if (isPairingRequested) return;
-        isPairingRequested = true;
+    whatsappClient.on('qr', async (qr) => {
+        if (isQrPrinted) return;
+        isQrPrinted = true;
 
-        console.log('⏳ تم رصد استجابة الواتساب! ننتظر 6 ثوانٍ لاكتمال تحميل الصفحة على السيرفر البطيء...');
+        console.log('\n=========================================');
+        console.log('📱 الخيار الأول (المضمون): امسح الباركود التالي:');
+        console.log('=========================================');
         
-        // الانتظار الإجباري للسيرفرات المجانية قبل طلب الرمز
+        // طباعة الباركود في الشاشة
+        qrcode.generate(qr, { small: true });
+
+        console.log('\n⏳ الخيار الثاني: جاري محاولة استخراج رمز الربط (Pairing Code)...');
+        
+        // الانتظار 8 ثوانٍ ثم محاولة استخراج الرمز السري
         setTimeout(async () => {
-            console.log('⏳ جاري طلب رمز الربط السري (Pairing Code)...');
             try {
                 const pairingCode = await whatsappClient.requestPairingCode(MY_PHONE_NUMBER);
                 console.log('\n=========================================');
                 console.log(`🔑 رمز الربط الخاص بك هو: ${pairingCode}`);
                 console.log('=========================================\n');
             } catch (error) {
-                console.error('❌ خطأ في طلب الرمز، السيرفر أبطأ من اللازم:', error.message);
-                isPairingRequested = false; // السماح بمحاولة جديدة
+                console.error('❌ تعذر استخراج رمز الربط بسبب تحديثات واتساب.');
+                console.log('👈 يرجى استخدام الخيار الأول (مسح الباركود بالأعلى) لربط البوت.');
             }
-        }, 6000); // تأخير 6 ثوانٍ
+        }, 8000); 
     });
 
     whatsappClient.on('remote_session_saved', () => {
-        console.log('☁️ 🎉 ممتاز! تم حفظ الجلسة في السحابة (MongoDB).');
+        console.log('☁️ 🎉 ممتاز! تم حفظ الجلسة في السحابة (MongoDB) للأبد.');
     });
 
     whatsappClient.on('ready', () => {
@@ -71,7 +77,7 @@ mongoose.connect(MONGODB_URI).then(() => {
 
     whatsappClient.on('disconnected', (reason) => {
         console.log('⚠️ انقطع اتصال الواتساب:', reason);
-        isPairingRequested = false;
+        isQrPrinted = false; // السماح بطباعة الباركود مجدداً
         whatsappClient.initialize();
     });
 
