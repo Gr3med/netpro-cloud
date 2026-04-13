@@ -1,39 +1,38 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 
-// إعداد المحرك للعمل في بيئة السيرفر (Render)
 const client = new Client({
-    authStrategy: new LocalAuth(), // لحفظ الدخول مؤقتاً
+    authStrategy: new LocalAuth(), // يحفظ الجلسة في مجلد .wwebjs_auth
     puppeteer: {
         headless: true,
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
+            '--disable-dev-shm-usage', // يمنع انهيار الذاكرة في سيرفرات لينكس
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--single-process', // لتقليل استهلاك الرام في ريندر
+            '--single-process', // الأهم لـ Render: دمج العمليات لتقليل الرام
             '--disable-gpu'
         ]
     }
 });
 
-// 1. استخراج الباركود في الـ Logs
 client.on('qr', (qr) => {
-    console.log('--- QR CODE بدأت عملية توليد ---');
-    console.log('امسح الكود أدناه لربط واتساب المحرك:');
+    console.log('=========================================');
+    console.log('📱 عاجل: امسح الباركود التالي لربط الواتساب');
+    console.log('=========================================');
     qrcode.generate(qr, { small: true });
 });
 
-// 2. نجاح الربط
 client.on('ready', () => {
-    console.log('✅ المحرك يعمل الآن! الواتساب مرتبط وجاهز لإرسال كروت NetPro.');
+    console.log('✅ تم ربط الواتساب بنجاح! المحرك جاهز.');
 });
 
-// 3. معالجة الخطأ عند فشل التشغيل
-client.on('auth_failure', msg => {
-    console.error('❌ فشل في المصادقة، يرجى إعادة مسح الباركود:', msg);
+// إعادة التشغيل التلقائي إذا انقطع الاتصال
+client.on('disconnected', (reason) => {
+    console.log('⚠️ انقطع اتصال الواتساب:', reason);
+    client.initialize();
 });
 
 client.initialize();
