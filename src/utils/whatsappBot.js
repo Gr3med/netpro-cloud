@@ -2,25 +2,27 @@ const { Client, RemoteAuth } = require('whatsapp-web.js');
 const { MongoStore } = require('wwebjs-mongo');
 const mongoose = require('mongoose');
 
-// ⚠️ ضع رقم هاتفك هنا مع مفتاح الدولة
-const MY_PHONE_NUMBER = '96770674574'; 
+// ⚠️ ضع رقم هاتفك هنا مع مفتاح الدولة (بدون +)
+const MY_PHONE_NUMBER = '967xxxxxxxxx'; 
 
-// رابط قاعدة البيانات الذي سنضعه في إعدادات Render
+// رابط قاعدة البيانات من إعدادات Render
 const MONGODB_URI = process.env.MONGO_URI; 
+
+// 1. تعريف المتغير في النطاق العام (Global Scope)
+let whatsappClient = null;
 
 console.log('🔄 جاري الاتصال بقاعدة بيانات الجلسات (MongoDB)...');
 
-// 1. الاتصال بقاعدة البيانات أولاً
+// 2. بدء الاتصال والتجهيز
 mongoose.connect(MONGODB_URI).then(() => {
-    console.log('✅ تم الاتصال بقاعدة البيانات. جاري تشغيل المحرك...');
+    console.log('✅ تم الاتصال بقاعدة بيانات MongoDB بنجاح.');
     
-    // إخبار الواتساب بأن يستخدم هذه القاعدة لحفظ الجلسات
     const store = new MongoStore({ mongoose: mongoose });
 
-    const client = new Client({
+    whatsappClient = new Client({
         authStrategy: new RemoteAuth({
             store: store,
-            backupSyncIntervalMs: 60000 // مزامنة الجلسة كل دقيقة لضمان عدم ضياعها
+            backupSyncIntervalMs: 60000 
         }),
         puppeteer: {
             headless: true,
@@ -37,11 +39,10 @@ mongoose.connect(MONGODB_URI).then(() => {
         }
     });
 
-    // 2. إذا لم تكن هناك جلسة محفوظة، سيطلب كود الربط
-    client.on('qr', async () => {
+    whatsappClient.on('qr', async () => {
         console.log('⏳ جاري استخراج رمز الربط السري (Pairing Code)...');
         try {
-            const pairingCode = await client.requestPairingCode(MY_PHONE_NUMBER);
+            const pairingCode = await whatsappClient.requestPairingCode(MY_PHONE_NUMBER);
             console.log('\n=========================================');
             console.log(`🔑 رمز الربط الخاص بك هو: ${pairingCode}`);
             console.log('=========================================\n');
@@ -50,25 +51,32 @@ mongoose.connect(MONGODB_URI).then(() => {
         }
     });
 
-    // 3. حدث الحفظ في السحابة (الأهم!)
-    client.on('remote_session_saved', () => {
-        console.log('☁️ 🎉 ممتاز! تم حفظ الجلسة في MongoDB. السيرفر الآن محمي ضد إعادة التشغيل.');
+    whatsappClient.on('remote_session_saved', () => {
+        console.log('☁️ 🎉 ممتاز! تم حفظ الجلسة في السحابة (MongoDB).');
     });
 
-    // 4. البوت جاهز للعمل
-    client.on('ready', () => {
+    whatsappClient.on('ready', () => {
         console.log('✅ تم ربط الواتساب بنجاح! المحرك يعمل الآن بكفاءة.');
     });
 
-    // إعادة التشغيل عند الانقطاع
-    client.on('disconnected', (reason) => {
+    whatsappClient.on('disconnected', (reason) => {
         console.log('⚠️ انقطع اتصال الواتساب:', reason);
-        client.initialize();
+        whatsappClient.initialize();
     });
 
-    client.initialize();
+    whatsappClient.initialize();
+
 }).catch((err) => {
     console.error('❌ فشل الاتصال بقاعدة بيانات MongoDB:', err);
 });
 
-module.exports = client; // سيتم تصديره بعد التفعيل
+// 3. تصدير دالة وسيطة لملف server.js
+module.exports = {
+    sendMessage: async (chatId, message) => {
+        // حماية السيرفر: التأكد من أن البوت جاهز قبل محاولة الإرسال
+        if (!whatsappClient) {
+            throw new Error('محرك الواتساب لم يكتمل تشغيله بعد، يرجى الانتظار ثوانٍ قليلة.');
+        }
+        return await whatsappClient.sendMessage(chatId, message);
+    }
+};
