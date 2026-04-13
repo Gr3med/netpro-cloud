@@ -43,6 +43,6 @@ app.get('/api/status', async (req, res) => {
 
 // تشغيل السيرفر
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 تم تشغيل سيرفر NetPro بنجاح على المنفذ ${PORT}`);
 });
