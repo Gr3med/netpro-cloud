@@ -1,11 +1,19 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 
-// إعداد المحرك للعمل في بيئة السيرفر (Render)
+// مهم: استدعاء puppeteer الكامل
+const puppeteer = require('puppeteer');
+
 const client = new Client({
-    authStrategy: new LocalAuth(), // لحفظ الدخول مؤقتاً
+    authStrategy: new LocalAuth({
+        dataPath: './.wwebjs_auth' // حفظ الجلسة
+    }),
     puppeteer: {
         headless: true,
+
+        // 🔥 أهم سطر لحل مشكلة Chrome
+        executablePath: puppeteer.executablePath(),
+
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -13,27 +21,31 @@ const client = new Client({
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--single-process', // لتقليل استهلاك الرام في ريندر
+            '--single-process',
             '--disable-gpu'
         ]
     }
 });
 
-// 1. استخراج الباركود في الـ Logs
+// QR
 client.on('qr', (qr) => {
-    console.log('--- QR CODE بدأت عملية توليد ---');
-    console.log('امسح الكود أدناه لربط واتساب المحرك:');
+    console.log('--- QR CODE ---');
     qrcode.generate(qr, { small: true });
 });
 
-// 2. نجاح الربط
+// جاهز
 client.on('ready', () => {
-    console.log('✅ المحرك يعمل الآن! الواتساب مرتبط وجاهز لإرسال كروت NetPro.');
+    console.log('✅ WhatsApp Ready!');
 });
 
-// 3. معالجة الخطأ عند فشل التشغيل
+// فشل المصادقة
 client.on('auth_failure', msg => {
-    console.error('❌ فشل في المصادقة، يرجى إعادة مسح الباركود:', msg);
+    console.error('❌ Auth failed:', msg);
+});
+
+// أخطاء عامة (مهم جدًا)
+client.on('disconnected', (reason) => {
+    console.log('🔴 Disconnected:', reason);
 });
 
 client.initialize();
