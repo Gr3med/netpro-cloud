@@ -41,7 +41,32 @@ app.get('/api/status', async (req, res) => {
  app.use('/api/v1/dashboard', dashboardRoutes);
  app.use('/api/v1/users', userRoutes);
  app.use('/api/v1/mobile', mobileRoutes);
+app.post('/api/v1/whatsapp/send', async (req, res) => {
+    try {
+        const { phone, pinCode } = req.body;
 
+        if (!phone || !pinCode) {
+            return res.status(400).json({ error: 'رقم الهاتف ورقم الكرت مطلوبان' });
+        }
+
+        // تهيئة الرقم اليمني ليقبله محرك الواتساب (إضافة 967 و @c.us)
+        let formattedPhone = phone.trim();
+        if (formattedPhone.startsWith('0')) formattedPhone = formattedPhone.substring(1);
+        if (formattedPhone.startsWith('7')) formattedPhone = '967' + formattedPhone;
+        
+        const chatId = `${formattedPhone}@c.us`; // هذه هي الصيغة الإجبارية لمكتبة whatsapp-web.js
+
+        const message = `*مرحباً بك في شبكتنا* 🌐\n\nتم إصدار كرت إنترنت بنجاح:\n*رقم الكرت (PIN):* ${pinCode}\n\nنتمنى لك تصفحاً ممتعاً! 🚀`;
+
+        // أمر البوت بالإرسال
+        await whatsappBot.sendMessage(chatId, message);
+
+        res.status(200).json({ success: true, message: 'تم الإرسال للزبون عبر بوت الإدارة بنجاح' });
+    } catch (error) {
+        console.error('خطأ في إرسال الواتساب:', error);
+        res.status(500).json({ error: 'فشل إرسال الرسالة، تأكد من أن البوت متصل.' });
+    }
+});
 // تشغيل السيرفر
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, '0.0.0.0', () => {
