@@ -11,6 +11,7 @@ const salesRoutes = require('./src/routes/salesRoutes');
 const dashboardRoutes = require('./src/routes/dashboardRoutes');
 const userRoutes = require('./src/routes/userRoutes');
 const mobileRoutes = require('./src/routes/mobileRoutes');
+const whatsappBot = require('./src/utils/whatsappBot');
 const app = express();
 
 // Middlewares أساسية
