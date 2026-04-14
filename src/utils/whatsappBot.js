@@ -1,139 +1,116 @@
-require('dotenv').config();
-
-const mongoose = require('mongoose');
-const qrcode = require('qrcode-terminal');
-const puppeteer = require('puppeteer');
 const { Client, RemoteAuth } = require('whatsapp-web.js');
 const { MongoStore } = require('wwebjs-mongo');
+const mongoose = require('mongoose');
+const qrcode = require('qrcode-terminal');
 
-const MONGO_URI = process.env.MONGO_URI;
-const CLIENT_ID = process.env.WA_CLIENT_ID || 'netpro';
-const PORT = process.env.PORT || 5000;
-
-if (!MONGO_URI) {
-  console.error('❌ MONGO_URI غير موجود داخل .env');
-  process.exit(1);
-}
+// ⚠️ ضع رقمك هنا (بدون +)
+const MY_PHONE_NUMBER = '967770674574'; 
+const MONGODB_URI = process.env.MONGO_URI;
 
 let whatsappClient = null;
-let isStarting = false;
-let isReady = false;
-let reconnectTimer = null;
+let isQrPrinted = false;
+
+// =====================================================================
+// 🛡️ درع الحماية الأقصى: يمنع سيرفر Node.js من الانهيار مهما حدث في كروم
+// =====================================================================
+process.on('unhandledRejection', (reason) => {
+    console.log('🛡️ [درع السيرفر] تم امتصاص صدمة/خطأ من متصفح كروم بصمت:', reason.message || reason);
+});
+process.on('uncaughtException', (error) => {
+    console.log('🛡️ [درع السيرفر] تم منع انهيار السيرفر بسبب خطأ مميت:', error.message);
+});
 
 console.log('=========================================');
-console.log('🚀 [النظام] بدء تشغيل محرك NetPro');
+console.log('🚀 [النظام] بدء تشغيل محرك NetPro الاحترافي (V2)');
 console.log('=========================================');
 
-async function startBot() {
-  if (isStarting) return;
-  isStarting = true;
-
-  try {
-    await mongoose.connect(MONGO_URI, {
-      serverSelectionTimeoutMS: 30000
-    });
-
+mongoose.connect(MONGODB_URI).then(() => {
     console.log('✅ [قاعدة البيانات] تم الاتصال بـ MongoDB بنجاح.');
-
-    const store = new MongoStore({ mongoose });
+    
+    const store = new MongoStore({ mongoose: mongoose });
 
     whatsappClient = new Client({
-      authStrategy: new RemoteAuth({
-        store,
-        clientId: CLIENT_ID,
-        backupSyncIntervalMs: 60000,
-        dataPath: './.wwebjs_auth/'
-      }),
-      puppeteer: {
-        headless: true,
-        executablePath: puppeteer.executablePath(),
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--no-first-run',
-          '--no-zygote',
-          '--disable-gpu'
-        ],
-        timeout: 120000
-      }
+        authStrategy: new RemoteAuth({
+            store: store,
+            backupSyncIntervalMs: 60000,
+            // 💡 السر هنا: تغيير اسم الجلسة لبدء صفحة بيضاء نظيفة في قاعدة البيانات
+            clientId: 'NetPro-Session-Clean-V1' 
+        }),
+        puppeteer: {
+            headless: true,
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--no-first-run',
+                '--no-zygote',
+                '--single-process',
+                '--disable-gpu'
+            ],
+            timeout: 120000 
+        }
     });
 
-    whatsappClient.on('qr', (qr) => {
-      console.log('\n=========================================');
-      console.log('📱 امسح هذا الباركود بكاميرا واتساب:');
-      console.log('=========================================');
-      qrcode.generate(qr, { small: true });
-    });
+    whatsappClient.on('qr', async (qr) => {
+        if (isQrPrinted) return;
+        isQrPrinted = true;
 
-    whatsappClient.on('authenticated', () => {
-      console.log('✅ [واتساب] تم التوثيق بنجاح.');
+        console.log('\n=========================================');
+        console.log('📱 [الخيار الأول] امسح هذا الباركود بكاميرا الواتساب:');
+        console.log('=========================================');
+        qrcode.generate(qr, { small: true });
+
+        console.log('\n⏳ [الخيار الثاني] جاري استخراج رمز الربط... الرجاء الانتظار 5 ثوانٍ.');
+        setTimeout(async () => {
+            try {
+                const pairingCode = await whatsappClient.requestPairingCode(MY_PHONE_NUMBER);
+                console.log('\n*****************************************');
+                console.log(`🔑 رمز الربط الخاص بك هو: ${pairingCode}`);
+                console.log('*****************************************\n');
+            } catch (error) {
+                console.log('\n⚠️ [تحذير] واتساب حظر الرمز السري. يرجى مسح الباركود أعلاه (صغّر الشاشة بـ Ctrl و - لقرائته).');
+            }
+        }, 5000); 
     });
 
     whatsappClient.on('remote_session_saved', () => {
-      console.log('☁️ [واتساب] تم حفظ الجلسة في MongoDB.');
+        console.log('☁️ 🎉 [ممتاز] تم حفظ الجلسة في MongoDB بنجاح دائم!');
     });
 
     whatsappClient.on('ready', () => {
-      isReady = true;
-      console.log('✅ [جاهز] تم ربط الواتساب، والنظام مستعد.');
+        console.log('✅ [جاهز] تم ربط الواتساب! البوت مستعد لإرسال الكروت.');
     });
 
-    whatsappClient.on('auth_failure', (msg) => {
-      console.error('❌ [واتساب] فشل في المصادقة:', msg);
+    whatsappClient.on('disconnected', async (reason) => {
+        console.log('⚠️ [تنبيه] انقطع اتصال الواتساب:', reason);
+        isQrPrinted = false; 
+        
+        // التدمير الآمن للمتصفح المعطوب قبل إعادة التشغيل
+        try {
+            console.log('🧹 جاري تنظيف الذاكرة وتدمير المتصفح القديم...');
+            await whatsappClient.destroy();
+        } catch (e) {}
+
+        setTimeout(() => {
+            console.log('🔄 جاري إعادة الإقلاع...');
+            whatsappClient.initialize().catch(err => console.log('❌ خطأ إعادة التشغيل', err));
+        }, 5000);
     });
 
-    whatsappClient.on('disconnected', (reason) => {
-      console.log('⚠️ [واتساب] انقطع الاتصال:', reason);
-      isReady = false;
-
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-
-      reconnectTimer = setTimeout(() => {
-        startBot().catch((err) => {
-          console.error('❌ [إعادة تشغيل] فشل إعادة الاتصال:', err.message);
-        });
-      }, 5000);
+    whatsappClient.initialize().catch(err => {
+        console.error('❌ [خطأ حرج] فشل تشغيل المتصفح:', err.message);
     });
 
-    whatsappClient.initialize();
-  } catch (error) {
-    console.error('❌ [خطأ حرج] فشل تشغيل البوت:', error.message);
-  } finally {
-    isStarting = false;
-  }
-}
-
-process.on('unhandledRejection', (err) => {
-  console.error('❌ [UnhandledRejection]:', err);
-});
-
-process.on('uncaughtException', (err) => {
-  console.error('❌ [UncaughtException]:', err);
-});
-
-startBot();
-
-const server = require('express')();
-
-server.get('/', (req, res) => {
-  res.status(200).json({
-    status: 'ok',
-    botReady: isReady
-  });
-});
-
-server.listen(PORT, () => {
-  console.log(`🚀 تم تشغيل سيرفر NetPro بنجاح على المنفذ ${PORT}`);
+}).catch((err) => {
+    console.error('❌ [خطأ] فشل الاتصال بقاعدة بيانات MongoDB:', err);
 });
 
 module.exports = {
-  sendMessage: async (chatId, message) => {
-    if (!whatsappClient || !isReady) {
-      throw new Error('البوت ليس جاهزًا بعد.');
+    sendMessage: async (chatId, message) => {
+        if (!whatsappClient) {
+            throw new Error('البوت قيد التشغيل، يرجى الانتظار.');
+        }
+        return await whatsappClient.sendMessage(chatId, message);
     }
-    return await whatsappClient.sendMessage(chatId, message);
-  },
-  getClient: () => whatsappClient
 };
