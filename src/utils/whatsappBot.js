@@ -1,4 +1,4 @@
-const { default: makeWASocket, DisconnectReason, BufferJSON, initAuthCreds } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, BufferJSON, initAuthCreds, fetchLatestBaileysVersion, Browsers } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const mongoose = require('mongoose');
 const qrcode = require('qrcode-terminal');
@@ -7,7 +7,7 @@ const MONGODB_URI = process.env.MONGO_URI;
 
 let sock = null;
 let isBotReady = false;
-let reconnectAttempts = 0; // 🌟 إضافة عداد لاكتشاف الحلقات المفرغة
+let reconnectAttempts = 0;
 
 // =====================================================================
 // 🧠 محول MongoDB مخصص لحفظ جلسة Baileys
@@ -32,7 +32,11 @@ async function useMongoDBAuthState() {
         await AuthModel.findByIdAndDelete(id);
     };
 
-    const creds = await readData('creds') || initAuthCreds();
+    let creds = await readData('creds');
+    if (!creds) {
+        creds = initAuthCreds();
+        await writeData(creds, 'creds');
+    }
 
     return {
         state: {
@@ -70,7 +74,7 @@ async function useMongoDBAuthState() {
 // 🤖 تشغيل المحرك (Baileys Core)
 // =====================================================================
 console.log('=========================================');
-console.log('🚀 [النظام] بدء تشغيل محرك NetPro الاحترافي (Baileys - Anti Loop)');
+console.log('🚀 [النظام] بدء تشغيل محرك NetPro الاحترافي (Baileys - Fix 405)');
 console.log('=========================================');
 
 async function startBot() {
@@ -81,12 +85,17 @@ async function startBot() {
         }
 
         const { state, saveCreds } = await useMongoDBAuthState();
+        
+        // 🎯 [الحل الجذري للخطأ 405]: جلب أحدث إصدار من واتساب ديناميكياً
+        const { version, isLatest } = await fetchLatestBaileysVersion();
+        console.log(`🌐 جاري الاتصال بخوادم واتساب (إصدار: ${version.join('.')}) - الأحدث: ${isLatest}`);
 
         sock = makeWASocket({
+            version, // إرفاق الإصدار هنا هو ما سيمنع الخطأ 405
             auth: state,
             logger: pino({ level: 'silent' }), 
             printQRInTerminal: false,
-            browser: ['NetPro System', 'Chrome', '1.0.0'],
+            browser: Browsers.macOS('Desktop'), // استخدام بصمة متصفح حقيقية لتجنب الحظر
             markOnlineOnConnect: false,
             syncFullHistory: false
         });
@@ -109,21 +118,18 @@ async function startBot() {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
                 
-                console.log(`⚠️ انقطع الاتصال. كود الخطأ: ${statusCode}`);
+                console.log(`⚠️ انقطع الاتصال. كود الخطأ: ${statusCode || 'غير معروف'}`);
 
                 if (shouldReconnect) {
                     reconnectAttempts++;
                     console.log(`🔄 محاولة إعادة الاتصال رقم (${reconnectAttempts})...`);
                     
-                    // 🌟 كبح الطوارئ: إذا فشل 3 مرات، نمسح البيانات التالفة
                     if (reconnectAttempts >= 3) {
-                        console.log('🚨 [حماية النظام] تم اكتشاف جلسة تالفة (حلقة مفرغة). جاري الفرمتة...');
+                        console.log('🚨 [حماية النظام] تم اكتشاف مشكلة في الاتصال. جاري مسح الذاكرة للبدء من الصفر...');
                         await AuthModel.deleteMany({});
                         reconnectAttempts = 0;
-                        console.log('✅ تم تنظيف السحابة. سيتم عرض باركود جديد الآن لتبدأ من الصفر.');
                     }
-                    
-                    setTimeout(startBot, 3000);
+                    setTimeout(startBot, 4000);
                 } else {
                     console.log('🚨 [طوارئ] تم تسجيل الخروج (LOGOUT). جاري تدمير الجلسة...');
                     await AuthModel.deleteMany({});
@@ -133,9 +139,9 @@ async function startBot() {
             }
 
             if (connection === 'open') {
-                console.log('✅ [جاهز] تم ربط الواتساب بنجاح عبر Baileys! استهلاك الذاكرة الآن مثالي.');
+                console.log('✅ [جاهز] تم ربط الواتساب بنجاح عبر Baileys! النظام مستقر.');
                 isBotReady = true;
-                reconnectAttempts = 0; // تصفير العداد عند النجاح
+                reconnectAttempts = 0; 
             }
         });
 
@@ -144,12 +150,8 @@ async function startBot() {
     }
 }
 
-// تشغيل النظام
 startBot();
 
-// =====================================================================
-// 📤 وحدة الإرسال (متوافقة 100% مع مساراتك)
-// =====================================================================
 module.exports = {
     sendMessage: async (chatId, message) => {
         if (!sock || !isBotReady) {
