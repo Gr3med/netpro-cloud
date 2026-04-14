@@ -7,9 +7,10 @@ const MONGODB_URI = process.env.MONGO_URI;
 
 let sock = null;
 let isBotReady = false;
+let reconnectAttempts = 0; // 🌟 إضافة عداد لاكتشاف الحلقات المفرغة
 
 // =====================================================================
-// 🧠 محول MongoDB مخصص لحفظ جلسة Baileys (حماية من الحذف في Render)
+// 🧠 محول MongoDB مخصص لحفظ جلسة Baileys
 // =====================================================================
 const AuthSchema = new mongoose.Schema({
     _id: { type: String, required: true },
@@ -69,7 +70,7 @@ async function useMongoDBAuthState() {
 // 🤖 تشغيل المحرك (Baileys Core)
 // =====================================================================
 console.log('=========================================');
-console.log('🚀 [النظام] بدء تشغيل محرك NetPro الاحترافي (Baileys Edition)');
+console.log('🚀 [النظام] بدء تشغيل محرك NetPro الاحترافي (Baileys - Anti Loop)');
 console.log('=========================================');
 
 async function startBot() {
@@ -83,17 +84,15 @@ async function startBot() {
 
         sock = makeWASocket({
             auth: state,
-            logger: pino({ level: 'silent' }), // إخفاء الرسائل المزعجة في التيرمنال
+            logger: pino({ level: 'silent' }), 
             printQRInTerminal: false,
             browser: ['NetPro System', 'Chrome', '1.0.0'],
             markOnlineOnConnect: false,
-            syncFullHistory: false // إيقاف المزامنة الثقيلة لتوفير الرام
+            syncFullHistory: false
         });
 
-        // حفظ الاعتمادات عند التحديث
         sock.ev.on('creds.update', saveCreds);
 
-        // مراقبة حالة الاتصال
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
 
@@ -107,15 +106,28 @@ async function startBot() {
 
             if (connection === 'close') {
                 isBotReady = false;
-                const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
                 
+                console.log(`⚠️ انقطع الاتصال. كود الخطأ: ${statusCode}`);
+
                 if (shouldReconnect) {
-                    console.log('🔄 انقطع الاتصال العادي. جاري إعادة الاتصال السريع...');
+                    reconnectAttempts++;
+                    console.log(`🔄 محاولة إعادة الاتصال رقم (${reconnectAttempts})...`);
+                    
+                    // 🌟 كبح الطوارئ: إذا فشل 3 مرات، نمسح البيانات التالفة
+                    if (reconnectAttempts >= 3) {
+                        console.log('🚨 [حماية النظام] تم اكتشاف جلسة تالفة (حلقة مفرغة). جاري الفرمتة...');
+                        await AuthModel.deleteMany({});
+                        reconnectAttempts = 0;
+                        console.log('✅ تم تنظيف السحابة. سيتم عرض باركود جديد الآن لتبدأ من الصفر.');
+                    }
+                    
                     setTimeout(startBot, 3000);
                 } else {
-                    console.log('🚨 [طوارئ] تم تسجيل الخروج (LOGOUT). جاري تدمير الجلسة السحابية...');
-                    await AuthModel.deleteMany({}); // تنظيف قاعدة البيانات بالكامل
-                    console.log('✅ تم التنظيف. جاري توليد باركود جديد...');
+                    console.log('🚨 [طوارئ] تم تسجيل الخروج (LOGOUT). جاري تدمير الجلسة...');
+                    await AuthModel.deleteMany({});
+                    reconnectAttempts = 0;
                     setTimeout(startBot, 5000);
                 }
             }
@@ -123,20 +135,7 @@ async function startBot() {
             if (connection === 'open') {
                 console.log('✅ [جاهز] تم ربط الواتساب بنجاح عبر Baileys! استهلاك الذاكرة الآن مثالي.');
                 isBotReady = true;
-            }
-        });
-
-        // الرد التلقائي (اختياري)
-        sock.ev.on('messages.upsert', async ({ messages, type }) => {
-            if (type !== 'notify') return;
-            const msg = messages[0];
-            if (!msg.message || msg.key.fromMe) return;
-
-            const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
-            const jid = msg.key.remoteJid;
-
-            if (text.trim() === 'مرحبا') {
-                await sock.sendMessage(jid, { text: 'مرحباً بك في نظام NetPro! 🚀 المحرك الجديد يعمل بكفاءة.' });
+                reconnectAttempts = 0; // تصفير العداد عند النجاح
             }
         });
 
@@ -149,7 +148,7 @@ async function startBot() {
 startBot();
 
 // =====================================================================
-// 📤 وحدة الإرسال (متوافقة 100% مع server.js الحالي الخاص بك)
+// 📤 وحدة الإرسال (متوافقة 100% مع مساراتك)
 // =====================================================================
 module.exports = {
     sendMessage: async (chatId, message) => {
@@ -159,18 +158,14 @@ module.exports = {
         }
 
         try {
-            // تحويل صيغة الرقم من @c.us (القديمة) إلى @s.whatsapp.net (لـ Baileys)
             let jid = chatId.includes('@c.us') ? chatId.replace('@c.us', '@s.whatsapp.net') : chatId;
             if (!jid.includes('@s.whatsapp.net')) jid = `${jid}@s.whatsapp.net`;
 
-            // محاكاة "يكتب..." (Typing)
             await sock.sendPresenceUpdate('composing', jid);
             await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 2000) + 1000));
             await sock.sendPresenceUpdate('paused', jid);
 
-            // إرسال الرسالة
-            const result = await sock.sendMessage(jid, { text: message });
-            return result;
+            return await sock.sendMessage(jid, { text: message });
         } catch (error) {
             console.error(`❌ فشل الإرسال للرقم ${chatId}:`, error.message);
             throw error;
