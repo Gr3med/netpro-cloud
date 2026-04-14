@@ -1,74 +1,179 @@
-const { Client, RemoteAuth } = require('whatsapp-web.js');
-const { MongoStore } = require('wwebjs-mongo');
+const { default: makeWASocket, DisconnectReason, BufferJSON, initAuthCreds } = require('@whiskeysockets/baileys');
+const pino = require('pino');
 const mongoose = require('mongoose');
+const qrcode = require('qrcode-terminal');
 
-// ⚠️ ضع رقم هاتفك هنا مع مفتاح الدولة
-const MY_PHONE_NUMBER = '96770674574'; 
+const MONGODB_URI = process.env.MONGO_URI;
 
-// رابط قاعدة البيانات الذي سنضعه في إعدادات Render
-const MONGODB_URI = process.env.MONGO_URI; 
+let sock = null;
+let isBotReady = false;
 
-console.log('🔄 جاري الاتصال بقاعدة بيانات الجلسات (MongoDB)...');
-
-// 1. الاتصال بقاعدة البيانات أولاً
-mongoose.connect(MONGODB_URI).then(() => {
-    console.log('✅ تم الاتصال بقاعدة البيانات. جاري تشغيل المحرك...');
-    
-    // إخبار الواتساب بأن يستخدم هذه القاعدة لحفظ الجلسات
-    const store = new MongoStore({ mongoose: mongoose });
-
-    const client = new Client({
-        authStrategy: new RemoteAuth({
-            store: store,
-            backupSyncIntervalMs: 60000 // مزامنة الجلسة كل دقيقة لضمان عدم ضياعها
-        }),
-        puppeteer: {
-            headless: true,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--no-first-run',
-                '--no-zygote',
-                '--single-process',
-                '--disable-gpu'
-            ]
-        }
-    });
-
-    // 2. إذا لم تكن هناك جلسة محفوظة، سيطلب كود الربط
-    client.on('qr', async () => {
-        console.log('⏳ جاري استخراج رمز الربط السري (Pairing Code)...');
-        try {
-            const pairingCode = await client.requestPairingCode(MY_PHONE_NUMBER);
-            console.log('\n=========================================');
-            console.log(`🔑 رمز الربط الخاص بك هو: ${pairingCode}`);
-            console.log('=========================================\n');
-        } catch (error) {
-            console.error('❌ خطأ في طلب الرمز:', error.message);
-        }
-    });
-
-    // 3. حدث الحفظ في السحابة (الأهم!)
-    client.on('remote_session_saved', () => {
-        console.log('☁️ 🎉 ممتاز! تم حفظ الجلسة في MongoDB. السيرفر الآن محمي ضد إعادة التشغيل.');
-    });
-
-    // 4. البوت جاهز للعمل
-    client.on('ready', () => {
-        console.log('✅ تم ربط الواتساب بنجاح! المحرك يعمل الآن بكفاءة.');
-    });
-
-    // إعادة التشغيل عند الانقطاع
-    client.on('disconnected', (reason) => {
-        console.log('⚠️ انقطع اتصال الواتساب:', reason);
-        client.initialize();
-    });
-
-    client.initialize();
-}).catch((err) => {
-    console.error('❌ فشل الاتصال بقاعدة بيانات MongoDB:', err);
+// =====================================================================
+// 🧠 محول MongoDB مخصص لحفظ جلسة Baileys (حماية من الحذف في Render)
+// =====================================================================
+const AuthSchema = new mongoose.Schema({
+    _id: { type: String, required: true },
+    data: { type: String, required: true }
 });
+const AuthModel = mongoose.models.BaileysAuth || mongoose.model('BaileysAuth', AuthSchema);
 
-module.exports = client; // سيتم تصديره بعد التفعيل
+async function useMongoDBAuthState() {
+    const writeData = async (data, id) => {
+        const str = JSON.stringify(data, BufferJSON.replacer);
+        await AuthModel.findByIdAndUpdate(id, { data: str }, { upsert: true });
+    };
+    const readData = async (id) => {
+        const doc = await AuthModel.findById(id);
+        if (doc) return JSON.parse(doc.data, BufferJSON.reviver);
+        return null;
+    };
+    const removeData = async (id) => {
+        await AuthModel.findByIdAndDelete(id);
+    };
+
+    const creds = await readData('creds') || initAuthCreds();
+
+    return {
+        state: {
+            creds,
+            keys: {
+                get: async (type, ids) => {
+                    const data = {};
+                    await Promise.all(ids.map(async id => {
+                        let value = await readData(`${type}-${id}`);
+                        if (type === 'app-state-sync-key' && value) {
+                            value = require('@whiskeysockets/baileys').proto.Message.AppStateSyncKeyData.fromObject(value);
+                        }
+                        data[id] = value;
+                    }));
+                    return data;
+                },
+                set: async (data) => {
+                    const tasks = [];
+                    for (const category in data) {
+                        for (const id in data[category]) {
+                            const value = data[category][id];
+                            const key = `${category}-${id}`;
+                            tasks.push(value ? writeData(value, key) : removeData(key));
+                        }
+                    }
+                    await Promise.all(tasks);
+                }
+            }
+        },
+        saveCreds: () => writeData(creds, 'creds')
+    };
+}
+
+// =====================================================================
+// 🤖 تشغيل المحرك (Baileys Core)
+// =====================================================================
+console.log('=========================================');
+console.log('🚀 [النظام] بدء تشغيل محرك NetPro الاحترافي (Baileys Edition)');
+console.log('=========================================');
+
+async function startBot() {
+    try {
+        if (mongoose.connection.readyState !== 1) {
+            await mongoose.connect(MONGODB_URI);
+            console.log('✅ [قاعدة البيانات] تم الاتصال بـ MongoDB بنجاح.');
+        }
+
+        const { state, saveCreds } = await useMongoDBAuthState();
+
+        sock = makeWASocket({
+            auth: state,
+            logger: pino({ level: 'silent' }), // إخفاء الرسائل المزعجة في التيرمنال
+            printQRInTerminal: false,
+            browser: ['NetPro System', 'Chrome', '1.0.0'],
+            markOnlineOnConnect: false,
+            syncFullHistory: false // إيقاف المزامنة الثقيلة لتوفير الرام
+        });
+
+        // حفظ الاعتمادات عند التحديث
+        sock.ev.on('creds.update', saveCreds);
+
+        // مراقبة حالة الاتصال
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
+
+            if (qr) {
+                isBotReady = false;
+                console.log('\n=========================================');
+                console.log('📱 امسح هذا الباركود بالكاميرا لتسجيل الدخول:');
+                console.log('=========================================');
+                qrcode.generate(qr, { small: true });
+            }
+
+            if (connection === 'close') {
+                isBotReady = false;
+                const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+                
+                if (shouldReconnect) {
+                    console.log('🔄 انقطع الاتصال العادي. جاري إعادة الاتصال السريع...');
+                    setTimeout(startBot, 3000);
+                } else {
+                    console.log('🚨 [طوارئ] تم تسجيل الخروج (LOGOUT). جاري تدمير الجلسة السحابية...');
+                    await AuthModel.deleteMany({}); // تنظيف قاعدة البيانات بالكامل
+                    console.log('✅ تم التنظيف. جاري توليد باركود جديد...');
+                    setTimeout(startBot, 5000);
+                }
+            }
+
+            if (connection === 'open') {
+                console.log('✅ [جاهز] تم ربط الواتساب بنجاح عبر Baileys! استهلاك الذاكرة الآن مثالي.');
+                isBotReady = true;
+            }
+        });
+
+        // الرد التلقائي (اختياري)
+        sock.ev.on('messages.upsert', async ({ messages, type }) => {
+            if (type !== 'notify') return;
+            const msg = messages[0];
+            if (!msg.message || msg.key.fromMe) return;
+
+            const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+            const jid = msg.key.remoteJid;
+
+            if (text.trim() === 'مرحبا') {
+                await sock.sendMessage(jid, { text: 'مرحباً بك في نظام NetPro! 🚀 المحرك الجديد يعمل بكفاءة.' });
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ خطأ فادح في تشغيل البوت:', error);
+    }
+}
+
+// تشغيل النظام
+startBot();
+
+// =====================================================================
+// 📤 وحدة الإرسال (متوافقة 100% مع server.js الحالي الخاص بك)
+// =====================================================================
+module.exports = {
+    sendMessage: async (chatId, message) => {
+        if (!sock || !isBotReady) {
+            console.log('⚠️ تم رفض الإرسال: البوت غير متصل.');
+            throw new Error('البوت غير متصل بالواتساب حالياً.');
+        }
+
+        try {
+            // تحويل صيغة الرقم من @c.us (القديمة) إلى @s.whatsapp.net (لـ Baileys)
+            let jid = chatId.includes('@c.us') ? chatId.replace('@c.us', '@s.whatsapp.net') : chatId;
+            if (!jid.includes('@s.whatsapp.net')) jid = `${jid}@s.whatsapp.net`;
+
+            // محاكاة "يكتب..." (Typing)
+            await sock.sendPresenceUpdate('composing', jid);
+            await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 2000) + 1000));
+            await sock.sendPresenceUpdate('paused', jid);
+
+            // إرسال الرسالة
+            const result = await sock.sendMessage(jid, { text: message });
+            return result;
+        } catch (error) {
+            console.error(`❌ فشل الإرسال للرقم ${chatId}:`, error.message);
+            throw error;
+        }
+    }
+};
