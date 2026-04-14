@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 const qrcode = require('qrcode-terminal');
 
 // ⚠️ ضع رقم الواتساب هنا مع المفتاح الدولي (بدون + أو أصفار)
-const MY_PHONE_NUMBER = '967xxxxxxxxx'; 
+const MY_PHONE_NUMBER = '967770674574'; 
 const MONGODB_URI = process.env.MONGO_URI;
 
 let whatsappClient = null;
