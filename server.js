@@ -51,10 +51,13 @@ app.use('/api/v1/mobile', mobileRoutes);
 // =====================================================================
 // 🚀 مسار الواتساب السريع (Fire-and-Forget API) 
 // =====================================================================
+// =====================================================================
+// 🚀 مسار الواتساب السريع (Fire-and-Forget API) 
+// =====================================================================
 app.post('/api/v1/whatsapp/send', async (req, res) => {
     try {
-        // إضافة distributorName (اسم الموزع) ليستقبله من تطبيق الموبايل
-        const { phone, pinCode, distributorName } = req.body;
+        // إضافة price (السعر) ليستقبله من تطبيق الموبايل
+        const { phone, pinCode, distributorName, price } = req.body;
 
         if (!phone || !pinCode) {
             return res.status(400).json({ error: 'رقم الهاتف ورقم الكرت مطلوبان' });
@@ -67,18 +70,26 @@ app.post('/api/v1/whatsapp/send', async (req, res) => {
         
         const chatId = `${formattedPhone}@c.us`; 
 
-        // اسم الموزع الافتراضي في حال لم يتم إرساله من التطبيق
         const shopName = distributorName ? distributorName : 'المركز الرئيسي';
+        const packagePrice = price ? `${price} ريال` : 'غير محدد';
 
-        // ✨ الرسالة الأنيقة والاحترافية بتنسيق Markdown للواتساب
-        const message = `✨ *شبكة زين ترحب بكم* ✨\n\n`
-                      + `مرحباً بك عميلنا العزيز 👋\n`
-                      + `تم إصدار كرت الإنترنت الخاص بك بنجاح من خلال موزعنا المعتمد:\n`
-                      + `🏪 *${shopName}*\n\n`
-                      + `💳 *رقم الكرت (PIN):*\n`
-                      + `*${pinCode}*\n\n`
-                      + `🌐 نتمنى لك تصفحاً ممتعاً وسريعاً!\n`
-                      + `📞 لخدمة العملاء، نحن دائماً في خدمتك.`;
+        // 🕒 استخراج الوقت والتاريخ بتنسيق احترافي
+        const now = new Date();
+        const dateStr = now.toLocaleDateString('en-GB'); // يعطي التاريخ بصيغة DD/MM/YYYY
+        const timeStr = now.toLocaleTimeString('ar-YE', { hour: '2-digit', minute: '2-digit', hour12: true }); // يعطي الوقت بصيغة 05:30 م
+
+        // ✨ الرسالة الملكية (VIP Message Formatted)
+        const message = `🌟 *مرحباً بك في شبكة زين نت* 🌟\n\n`
+                      + `يسعدنا اختيارك لشبكتنا! تم إصدار كرت الإنترنت بنجاح. 🎉\n`
+                      + `━━━━━━━━━━━━━━\n`
+                      + `🎫 *رقم الكرت (PIN):*\n`
+                      + `\`\`\`${pinCode}\`\`\`\n` // 👈 هذا التنسيق يجعل الكرت في مربع رمادي ويُنسخ بضغطة واحدة في الواتساب!
+                      + `━━━━━━━━━━━━━━\n`
+                      + `💰 *السعر:* ${packagePrice}\n`
+                      + `🏪 *الموزع:* ${shopName}\n`
+                      + `📅 *التاريخ:* ${dateStr}\n`
+                      + `⏰ *الوقت:* ${timeStr}\n\n`
+                      + `🚀 *زين نت*.. نتمنى لك تصفحاً فائق السرعة!`;
 
         // ⚡ الاستجابة فوراً لتطبيق الموبايل قبل بدء الإرسال الفعلي
         res.status(200).json({ success: true, message: 'تم استلام طلب الواتساب وجاري معالجته في الخلفية' });
@@ -94,7 +105,6 @@ app.post('/api/v1/whatsapp/send', async (req, res) => {
         console.error('❌ خطأ غير متوقع في مسار الواتساب:', error);
     }
 });
-
 // تشغيل السيرفر
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, '0.0.0.0', () => {
