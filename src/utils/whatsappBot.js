@@ -1,19 +1,21 @@
 const { Client, RemoteAuth } = require('whatsapp-web.js');
 const { MongoStore } = require('wwebjs-mongo');
 const mongoose = require('mongoose');
-const qrcode = require('qrcode-terminal'); // استدعاء مكتبة الباركود
+const qrcode = require('qrcode-terminal');
 
-// ⚠️ ضع رقم هاتفك هنا مع مفتاح الدولة (بدون +)
+// ⚠️ ضع رقمك هنا مع المفتاح الدولي (بدون +)
 const MY_PHONE_NUMBER = '967770674574'; 
-const MONGODB_URI = process.env.MONGO_URI; 
+const MONGODB_URI = process.env.MONGO_URI;
 
 let whatsappClient = null;
-let isQrPrinted = false; // حارس لمنع تكرار الطباعة
+let isQrPrinted = false; // لمنع تكرار الطباعة
 
-console.log('🔄 جاري الاتصال بقاعدة بيانات الجلسات (MongoDB)...');
+console.log('=========================================');
+console.log('🚀 [النظام] بدء تشغيل محرك NetPro الاحترافي');
+console.log('=========================================');
 
 mongoose.connect(MONGODB_URI).then(() => {
-    console.log('✅ تم الاتصال بقاعدة بيانات MongoDB بنجاح.');
+    console.log('✅ [قاعدة البيانات] تم الاتصال بـ MongoDB بنجاح.');
     
     const store = new MongoStore({ mongoose: mongoose });
 
@@ -34,63 +36,65 @@ mongoose.connect(MONGODB_URI).then(() => {
                 '--single-process',
                 '--disable-gpu'
             ],
-            timeout: 60000
-        },
-        authTimeoutMs: 120000,
-        qrMaxRetries: 3
+            timeout: 120000 // إعطاء السيرفر دقيقتين لفتح المتصفح براحة تامة
+        }
     });
 
+    // عندما يكون البوت جاهزاً للربط
     whatsappClient.on('qr', async (qr) => {
         if (isQrPrinted) return;
         isQrPrinted = true;
 
         console.log('\n=========================================');
-        console.log('📱 الخيار الأول (المضمون): امسح الباركود التالي:');
+        console.log('📱 [الخيار الأول] امسح هذا الباركود بكاميرا الواتساب:');
         console.log('=========================================');
         
-        // طباعة الباركود في الشاشة
+        // رسم الباركود فوراً قبل أي شيء آخر
         qrcode.generate(qr, { small: true });
 
-        console.log('\n⏳ الخيار الثاني: جاري محاولة استخراج رمز الربط (Pairing Code)...');
+        console.log('\n⏳ [الخيار الثاني] جاري استخراج رمز الربط (Pairing Code)... الرجاء الانتظار 5 ثوانٍ.');
         
-        // الانتظار 8 ثوانٍ ثم محاولة استخراج الرمز السري
+        // الانتظار الإجباري لتفادي أخطاء الواتساب
         setTimeout(async () => {
             try {
                 const pairingCode = await whatsappClient.requestPairingCode(MY_PHONE_NUMBER);
-                console.log('\n=========================================');
+                console.log('\n*****************************************');
                 console.log(`🔑 رمز الربط الخاص بك هو: ${pairingCode}`);
-                console.log('=========================================\n');
+                console.log('*****************************************\n');
             } catch (error) {
-                console.error('❌ تعذر استخراج رمز الربط بسبب تحديثات واتساب.');
-                console.log('👈 يرجى استخدام الخيار الأول (مسح الباركود بالأعلى) لربط البوت.');
+                console.log('\n⚠️ [تحذير] قامت شركة واتساب بحظر استخراج الرمز السري مؤقتاً في هذه الجلسة.');
+                console.log('👈 يرجى استخدام الخيار الأول (مسح الباركود) الموجود في الأعلى. (قم بتصغير الشاشة Ctrl و - لقرائته).\n');
             }
-        }, 8000); 
+        }, 5000); 
     });
 
     whatsappClient.on('remote_session_saved', () => {
-        console.log('☁️ 🎉 ممتاز! تم حفظ الجلسة في السحابة (MongoDB) للأبد.');
+        console.log('☁️ 🎉 [ممتاز] تم حفظ الجلسة في MongoDB للأبد! لن تحتاج لمسح الباركود مجدداً.');
     });
 
     whatsappClient.on('ready', () => {
-        console.log('✅ تم ربط الواتساب بنجاح! المحرك يعمل الآن بكفاءة.');
+        console.log('✅ [جاهز] تم ربط الواتساب! البوت مستعد لإرسال الكروت.');
     });
 
     whatsappClient.on('disconnected', (reason) => {
-        console.log('⚠️ انقطع اتصال الواتساب:', reason);
-        isQrPrinted = false; // السماح بطباعة الباركود مجدداً
+        console.log('⚠️ [تنبيه] انقطع اتصال الواتساب:', reason);
+        isQrPrinted = false; 
         whatsappClient.initialize();
     });
 
-    whatsappClient.initialize();
+    // تشغيل المحرك مع اصطياد الانهيارات
+    whatsappClient.initialize().catch(err => {
+        console.error('❌ [خطأ حرج] فشل تشغيل المتصفح:', err.message);
+    });
 
 }).catch((err) => {
-    console.error('❌ فشل الاتصال بقاعدة بيانات MongoDB:', err);
+    console.error('❌ [خطأ] فشل الاتصال بقاعدة بيانات MongoDB:', err);
 });
 
 module.exports = {
     sendMessage: async (chatId, message) => {
         if (!whatsappClient) {
-            throw new Error('محرك الواتساب لم يكتمل تشغيله بعد، يرجى الانتظار ثوانٍ قليلة.');
+            throw new Error('البوت قيد التشغيل، يرجى الانتظار.');
         }
         return await whatsappClient.sendMessage(chatId, message);
     }
