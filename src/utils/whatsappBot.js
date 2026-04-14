@@ -4,28 +4,48 @@ const mongoose = require('mongoose');
 const qrcode = require('qrcode-terminal');
 
 // ⚠️ ضع رقم الواتساب هنا مع المفتاح الدولي (بدون + أو أصفار)
-const MY_PHONE_NUMBER = '967770674574'; 
+const MY_PHONE_NUMBER = '967782607615'; 
 const MONGODB_URI = process.env.MONGO_URI;
 
 let whatsappClient = null;
-let isQrPrinted = false;
 let isClientReady = false; 
+let qrRefreshTimeout = null; // 🌟 مؤقت تحديث الباركود
+let qrCount = 0; // عداد محاولات الباركود
+
+// =====================================================================
+// 🧠 نظام إدارة جلسات المستخدمين (لعمل خطوات متسلسلة مثل الحجز والشراء)
+// =====================================================================
+const activeSessions = new Map();
+
+const sessionManager = {
+    set: (chatId, stepName, extraData = {}) => {
+        if (activeSessions.has(chatId)) clearTimeout(activeSessions.get(chatId).timeout);
+        const timeout = setTimeout(() => activeSessions.delete(chatId), 600000); // 10 دقائق وتنتهي
+        activeSessions.set(chatId, { stepName, extraData, timeout });
+    },
+    get: (chatId) => activeSessions.get(chatId),
+    remove: (chatId) => {
+        if (activeSessions.has(chatId)) {
+            clearTimeout(activeSessions.get(chatId).timeout);
+            activeSessions.delete(chatId);
+        }
+    }
+};
 
 // =====================================================================
 // 🛡️ درع الحماية الأقصى: يمنع سيرفر Node.js من الانهيار
 // =====================================================================
 process.on('unhandledRejection', (reason) => {
-    // تجاهل خطأ تدمير السياق لأنه متوقع عند إغلاق المتصفح أو إعادة التشغيل
     if (reason && reason.message && reason.message.includes('Execution context was destroyed')) return;
     console.log('🛡️ [درع السيرفر] تم امتصاص خطأ بصمت:', reason?.message || reason);
 });
 
 process.on('uncaughtException', (error) => {
-    console.log('🛡️ [درع السيرفر] تم منع انهيار السيرفر بسبب خطأ مميت:', error?.message);
+    console.log('🛡️ [درع السيرفر] تم منع انهيار السيرفر:', error?.message);
 });
 
 console.log('=========================================');
-console.log('🚀 [النظام] بدء تشغيل محرك NetPro الاحترافي (V3 - Enterprise)');
+console.log('🚀 [النظام] بدء تشغيل محرك NetPro الاحترافي (V4 - Auto Refresh)');
 console.log('=========================================');
 
 mongoose.connect(MONGODB_URI).then(() => {
@@ -33,9 +53,7 @@ mongoose.connect(MONGODB_URI).then(() => {
     
     const store = new MongoStore({ mongoose: mongoose });
 
-    // =====================================================================
     // ⚙️ إعدادات المتصفح المحسنة لمنصات الاستضافة المجانية (Render)
-    // =====================================================================
     whatsappClient = new Client({
         authStrategy: new RemoteAuth({
             store: store,
@@ -52,8 +70,7 @@ mongoose.connect(MONGODB_URI).then(() => {
                 '--no-first-run',
                 '--no-zygote',
                 '--disable-gpu',
-                // 🛡️ دروع حماية الذاكرة (لإجبار المتصفح على عدم استهلاك كل الرام)
-                '--js-flags="--max-old-space-size=256"', 
+                '--js-flags="--max-old-space-size=256"', // 🛡️ حماية الذاكرة العشوائية من الامتلاء
                 '--memory-pressure-off',
                 '--disable-software-rasterizer',
                 '--disable-features=site-per-process' 
@@ -64,59 +81,99 @@ mongoose.connect(MONGODB_URI).then(() => {
 
     whatsappClient.on('qr', async (qr) => {
         isClientReady = false; 
-        if (isQrPrinted) return;
-        isQrPrinted = true;
-
+        qrCount++;
+        
         console.log('\n=========================================');
-        console.log('📱 [الخيار الأول] امسح هذا الباركود بكاميرا الواتساب:');
+        console.log(`📱 [الباركود - محاولة ${qrCount}] امسح هذا الباركود بالكاميرا:`);
         console.log('=========================================');
         qrcode.generate(qr, { small: true });
 
-        console.log('\n⏳ جاري محاولة استخراج رمز الربط البديل...');
-        try {
-            await new Promise(resolve => setTimeout(resolve, 3000));
-            const pairingCode = await whatsappClient.requestPairingCode(MY_PHONE_NUMBER);
-            console.log('\n*****************************************');
-            console.log(`🔑 رمز الربط الخاص بك هو: ${pairingCode}`);
-            console.log('*****************************************\n');
-        } catch (error) {
-            console.log('\n⚠️ [حظر مؤقت] واتساب أوقف طلبات الرمز السري حالياً. يرجى استخدام مسح الباركود (QR Code) أعلاه.');
-        }
+        // ⏱️ نظام التحديث التلقائي للباركود بعد دقيقة
+        clearTimeout(qrRefreshTimeout);
+        qrRefreshTimeout = setTimeout(async () => {
+            if (!isClientReady) {
+                console.log('\n⏳ [تحديث] مرت 60 ثانية ولم يتم مسح الباركود. جاري توليد واحد جديد...');
+                try {
+                    await whatsappClient.destroy();
+                    whatsappClient.initialize().catch(() => {});
+                } catch (e) {}
+            }
+        }, 60000); // 60,000 مللي ثانية = دقيقة واحدة
     });
 
     whatsappClient.on('remote_session_saved', () => {
-        console.log('☁️ 🎉 [ممتاز] تم حفظ الجلسة في MongoDB بنجاح دائم!');
+        console.log('☁️ 🎉 [ممتاز] تم حفظ الجلسة في السحابة بنجاح!');
     });
 
     whatsappClient.on('ready', () => {
-        console.log('✅ [جاهز] تم ربط الواتساب بنجاح! البوت مستقر ومستعد لإرسال الكروت.');
+        console.log('✅ [جاهز] تم ربط الواتساب بنجاح! البوت مستقر ومستعد للعمل.');
         isClientReady = true; 
-        isQrPrinted = false;
+        clearTimeout(qrRefreshTimeout); // إيقاف مؤقت التحديث لأننا اتصلنا بنجاح
+        qrCount = 0; // تصفير العداد
+    });
+
+    // =====================================================================
+    // 🤖 معالج رسائل الواتساب (التفاعل المباشر مع العملاء)
+    // =====================================================================
+    whatsappClient.on('message', async (msg) => {
+        if (!isClientReady) return;
+        
+        const chatId = msg.from;
+        const text = msg.body.trim();
+        const currentSession = sessionManager.get(chatId);
+
+        // 1. أمر الخروج العام
+        if (text === 'الغاء' || text === 'خروج') {
+            if (currentSession) {
+                sessionManager.remove(chatId);
+                await msg.reply('⛔ تم إلغاء العملية. كيف يمكنني مساعدتك؟');
+            }
+            return;
+        }
+
+        // 2. إذا كان المستخدم في منتصف عملية (جلسة محجوزة)
+        if (currentSession) {
+            if (currentSession.stepName === 'WAITING_FOR_PIN') {
+                if (text.length >= 4) {
+                    await msg.reply(`✅ تم استلام الكرت: ${text}. جاري المعالجة...`);
+                    sessionManager.remove(chatId);
+                } else {
+                    await msg.reply('⚠️ رقم الكرت قصير. أرسل الرقم الصحيح أو اكتب "الغاء".');
+                }
+                return; 
+            }
+        }
+
+        // 3. الأوامر العادية
+        if (text === 'مرحبا') {
+            await msg.reply('مرحباً بك في شبكتنا 🌐\nأرسل كلمة "شراء" للبدء.');
+        } else if (text === 'شراء') {
+            await msg.reply('💳 تفضل بإرسال رقم الكرت:');
+            sessionManager.set(chatId, 'WAITING_FOR_PIN'); // حجز الجلسة
+        }
     });
 
     whatsappClient.on('disconnected', async (reason) => {
         console.log(`⚠️ [تنبيه] انقطع اتصال الواتساب. السبب: ${reason}`);
         isClientReady = false; 
-        isQrPrinted = false; 
+        clearTimeout(qrRefreshTimeout);
         
-        // 🧹 التنظيف الذاتي للجلسة التالفة من السحابة إذا طردك واتساب
+        // 🧹 التنظيف الذاتي للجلسة التالفة
         if (reason === 'LOGOUT') {
-            console.log('🚨 [علاج ذاتي] الجلسة المحفوظة مرفوضة. جاري تدمير البيانات التالفة للبدء من جديد...');
+            console.log('🚨 [علاج ذاتي] الجلسة مرفوضة. جاري تدمير البيانات التالفة...');
             try {
                 await mongoose.connection.db.collection('whatsapp-RemoteAuth-NetPro-Session-Clean-V1.files').drop().catch(()=>Object());
                 await mongoose.connection.db.collection('whatsapp-RemoteAuth-NetPro-Session-Clean-V1.chunks').drop().catch(()=>Object());
-                console.log('✅ تم تنظيف الذاكرة السحابية التالفة بنجاح. البوت سيطبع باركود جديد.');
+                console.log('✅ تم تنظيف السحابة. سيتم عرض باركود جديد.');
             } catch (e) {}
         }
 
         try {
-            console.log('🧹 جاري تدمير المتصفح القديم وإعادة الإقلاع بأمان...');
+            console.log('🧹 جاري إعادة تشغيل المحرك...');
             if (whatsappClient) await whatsappClient.destroy();
         } catch (e) {}
 
-        // إعادة التشغيل بعد 8 ثوانٍ لضمان تفريغ الذاكرة العشوائية بالكامل
         setTimeout(() => {
-            console.log('🔄 جاري بدء جلسة جديدة...');
             whatsappClient.initialize().catch(() => {});
         }, 8000);
     });
@@ -133,28 +190,22 @@ mongoose.connect(MONGODB_URI).then(() => {
     whatsappClient.initialize().catch(() => {});
 
 }).catch((err) => {
-    console.error('❌ [خطأ] فشل الاتصال بقاعدة بيانات MongoDB:', err);
+    console.error('❌ [خطأ] فشل الاتصال بـ MongoDB:', err);
 });
 
 // =====================================================================
-// 🤖 وحدة الإرسال الذكية (محمية ضد الانهيارات)
+// 📤 وحدة الإرسال السريع (تُستدعى من ملف server.js)
 // =====================================================================
 module.exports = {
     sendMessage: async (chatId, message) => {
         if (!whatsappClient || !isClientReady) {
-            console.log(`⚠️ تم رفض إرسال رسالة للرقم ${chatId} (البوت غير جاهز بعد).`);
-            throw new Error('البوت غير متصل بالواتساب حالياً. يرجى الانتظار.');
+            throw new Error('البوت غير متصل بالواتساب حالياً.');
         }
 
         try {
-            // التحقق من وجود الرقم في واتساب لتجنب الحظر
             const isRegistered = await whatsappClient.isRegisteredUser(chatId);
-            if (!isRegistered) {
-                console.log(`⚠️ الرقم ${chatId} لا يمتلك حساب واتساب.`);
-                throw new Error('الرقم المدخل لا يمتلك حساب واتساب نشط.');
-            }
+            if (!isRegistered) throw new Error('الرقم المدخل لا يمتلك واتساب.');
 
-            // محاكاة الكتابة لتقليل فرص الحظر
             try {
                 const chat = await whatsappClient.getChatById(chatId);
                 if (chat) {
@@ -162,9 +213,7 @@ module.exports = {
                     await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 2000) + 1000));
                     await chat.clearState();
                 }
-            } catch (e) {
-                console.log('⚠️ تعذر محاكاة الكتابة، سيتم الإرسال المباشر.');
-            }
+            } catch (e) {}
 
             return await whatsappClient.sendMessage(chatId, message);
         } catch (error) {
